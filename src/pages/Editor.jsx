@@ -6,6 +6,8 @@ import ProgressModal from '../components/ProgressModal';
 import KeyboardShortcuts from '../components/KeyboardShortcuts';
 import { validateCSV, processCSV } from '../utils/csvUtils';
 import { generateCertificatesZip, generateQRCodesZip } from '../utils/exportUtils';
+import JSZip from 'jszip';
+import { fabric } from 'fabric';
 import { generateQRCodeDataURL } from '../utils/qrUtils';
 import { saveVerificationMapping } from '../utils/verificationStore';
 import { v4 as uuidv4 } from 'uuid';
@@ -138,8 +140,12 @@ const Editor = () => {
       const link = document.createElement('a');
       link.download = `certificates_${Date.now()}.zip`;
       link.href = URL.createObjectURL(zipBlob);
+      document.body.appendChild(link);
       link.click();
-      URL.revokeObjectURL(link.href);
+      setTimeout(() => {
+        URL.revokeObjectURL(link.href);
+        document.body.removeChild(link);
+      }, 1500);
       
       showToast(`Successfully generated ${csvData.length} certificates!`, 'success');
     } catch (error) {
@@ -162,16 +168,69 @@ const Editor = () => {
       return;
     }
     try {
-      const zipBlob = await generateQRCodesZip(selectedQRIds, selectedTextIds, csvData.map((r, idx) => ({ ...r, verificationId: r.verificationId || `auto-${idx+1}` })), csvHeaders, securityData);
+      const selectedTextIdsLocal = textFields.filter(f => f.selected).map(f => f.id);
+      const zipBlob = await generateQRCodesZip(
+        selectedQRIds,
+        selectedTextIdsLocal,
+        csvData.map((r, idx) => ({ ...r, verificationId: r.verificationId || `auto-${idx+1}` })),
+        csvHeaders,
+        securityData
+      );
       const link = document.createElement('a');
       link.download = `qr_images_${Date.now()}.zip`;
       link.href = URL.createObjectURL(zipBlob);
+      // append to DOM to improve cross-browser reliability
+      document.body.appendChild(link);
       link.click();
-      URL.revokeObjectURL(link.href);
+      // delay revoke slightly to avoid race where browser hasn't started download yet
+      setTimeout(() => {
+        URL.revokeObjectURL(link.href);
+        document.body.removeChild(link);
+      }, 1500);
       showToast('QR PNG ZIP generated and downloaded', 'success');
     } catch (e) {
       console.error(e);
       showToast('Error generating QR ZIP', 'error');
+    }
+  };
+
+  const handleUploadQRZip = async (file) => {
+    if (!file) return;
+    try {
+      const zip = await JSZip.loadAsync(file);
+      const canvasApi = canvasRef;
+      if (!canvasApi) { showToast('Canvas not ready', 'error'); return; }
+      const canvas = canvasApi.getCanvas();
+      for (const path of Object.keys(zip.files)) {
+        const entry = zip.files[path];
+        if (entry.dir) continue;
+        const blob = await entry.async('blob');
+        const url = URL.createObjectURL(blob);
+        const fileName = path.split('/').pop();
+        const base = fileName.replace(/\.[^/.]+$/, '');
+        const parts = base.split('_');
+        const candidate = parts[parts.length - 1];
+        const qrField = qrFields.find(q => q.id === candidate) || qrFields.find(q => base.includes(q.id));
+        await new Promise((res) => {
+          fabric.Image.fromURL(url, (img) => {
+            if (qrField) {
+              const left = (qrField.x / 100) * canvas.width;
+              const top = (qrField.y / 100) * canvas.height;
+              img.set({ left, top, width: qrField.width, height: qrField.height, scaleX: 1, scaleY: 1, hasControls: true, hasBorders: true, selectable: true, name: 'qr-upload', id: `uploaded-${Date.now()}` });
+            } else {
+              img.set({ left: canvas.width / 2 - img.width / 2, top: canvas.height / 2 - img.height / 2, hasControls: true, hasBorders: true, selectable: true, name: 'qr-upload', id: `uploaded-${Date.now()}` });
+            }
+            canvas.add(img);
+            canvas.renderAll();
+            URL.revokeObjectURL(url);
+            res();
+          }, { crossOrigin: 'anonymous' });
+        });
+      }
+      showToast('QR images uploaded and placed', 'success');
+    } catch (e) {
+      console.error('QR ZIP upload error', e);
+      showToast('Error processing QR ZIP', 'error');
     }
   };
 
@@ -207,7 +266,7 @@ const Editor = () => {
       
       if (selectedQRs.length > 0) {
         const restoreUpdates = {};
-        selectedQRs.forEach(qr => { restoreUpdates[qr.id] = 'https://example.com/verify/placeholder'; });
+        selectedQRs.forEach(qr => { restoreUpdates[qr.id] = 'https://certificate-generator-ten-self.vercel.app/verify/placeholder'; });
         await canvasRef.replaceQRImages(restoreUpdates);
       }
     } catch (error) {
@@ -251,8 +310,8 @@ const Editor = () => {
     const newId = `qr-${Date.now()}`;
     setQrFields(prev => [...prev, {
       id: newId,
-      x: 85,        // near bottom-right
-      y: 85,
+      x: 85,        // near top-right (more visible)
+      y: 15,
       width: 76,
       height: 76,
       selected: true
@@ -308,7 +367,7 @@ const Editor = () => {
         </div>
       )}
 
-      <div className="flex-1 flex gap-6 min-h-0">
+      <div className="flex-1 flex flex-col lg:flex-row gap-6 min-h-0">
         <div className="flex-1 flex flex-col gap-4">
           <div className="glass-panel p-3 flex gap-3 items-center justify-center">
             <button onClick={addTextField} className="btn-secondary px-4 py-2 text-sm">➕ Add Text</button>
@@ -337,7 +396,7 @@ const Editor = () => {
           </div>
         </div>
 
-        <div className="w-96 flex flex-col gap-4 overflow-y-auto">
+        <div className="w-full lg:w-96 flex flex-col gap-4 overflow-y-auto">
           <ControlPanel
             textFields={textFields}
             qrFields={qrFields}
@@ -357,6 +416,7 @@ const Editor = () => {
             onCSVUpload={handleCSVUpload}
             onBackgroundUpload={setBackgroundImage}
             onSignatureUpload={setSignatureImage}
+            onUploadQRZip={handleUploadQRZip}
             onAddCSVColumns={addCSVColumnsAsFields}
             securityData={securityData}
             setSecurityData={setSecurityData}

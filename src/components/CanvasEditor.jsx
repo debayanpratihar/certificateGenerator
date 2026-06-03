@@ -248,7 +248,7 @@ const CanvasEditor = forwardRef(({ onCanvasReady, textFields, qrFields, onTextFi
         obj.setCoords();
       } else {
         // Generate a local placeholder QR image (PNG)
-        const qrDataURL = await generateQRCodeDataURL('https://example.com/verify/placeholder', 300);
+        const qrDataURL = await generateQRCodeDataURL('https://certificate-generator-ten-self.vercel.app/verify/placeholder', 300);
         fabric.Image.fromURL(qrDataURL, (img) => {
           img.set({
             left: newLeft,

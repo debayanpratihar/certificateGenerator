@@ -10,6 +10,7 @@ const ControlPanel = ({
   onDeleteTextField, onDeleteQRField, onAddTextField, onAddQRField,
   onUpdateTextField, onUpdateMultipleTextFields, onUpdateQRField,
   onCSVUpload, onBackgroundUpload, onSignatureUpload,
+  onUploadQRZip,
   onAddCSVColumns, securityData, setSecurityData,
   activeTab: activeTabProp, onTabChange
 }) => {
@@ -110,6 +111,7 @@ const ControlPanel = ({
             <FileUploader label="Certificate Template (scaled to fit)" accept="image/*" onFileSelect={onBackgroundUpload} icon="🎨" />
             <FileUploader label="Signature (PNG)" accept="image/png" onFileSelect={onSignatureUpload} icon="✍️" />
             <FileUploader label="CSV/Excel Data" accept=".csv,.xlsx,.xls" onFileSelect={onCSVUpload} icon="📊" />
+            <FileUploader label="Upload QR PNGs ZIP" accept=".zip" onFileSelect={onUploadQRZip} icon="🗜️" />
             <div className="border-t border-white/10 pt-3">
               <label className="text-sm font-medium">Extra Security Data (optional):</label>
               <input type="text" value={securityData} onChange={(e) => setSecurityData(e.target.value)} placeholder="e.g., batch number" className="input-dark w-full mt-1 text-sm" />
