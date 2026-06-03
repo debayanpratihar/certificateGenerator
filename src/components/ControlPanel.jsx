@@ -10,9 +10,15 @@ const ControlPanel = ({
   onDeleteTextField, onDeleteQRField, onAddTextField, onAddQRField,
   onUpdateTextField, onUpdateMultipleTextFields, onUpdateQRField,
   onCSVUpload, onBackgroundUpload, onSignatureUpload,
-  onAddCSVColumns, securityData, setSecurityData
+  onAddCSVColumns, securityData, setSecurityData,
+  activeTab: activeTabProp, onTabChange
 }) => {
-  const [activeTab, setActiveTab] = useState('fields');
+  const [internalTab, setInternalTab] = useState('fields');
+  const activeTab = typeof activeTabProp === 'string' ? activeTabProp : internalTab;
+  const setActiveTab = (t) => {
+    if (onTabChange) onTabChange(t);
+    else setInternalTab(t);
+  };
   const [selectedColumns, setSelectedColumns] = useState([]);
 
   const toggleColumn = (col) => {
@@ -43,7 +49,7 @@ const ControlPanel = ({
         {activeTab === 'fields' && (
           <>
             <div className="space-y-2 max-h-80 overflow-y-auto">
-              <h4 className="text-sm font-semibold text-white sticky top-0 bg-slate-900/90 py-1">Text Fields</h4>
+              <h4 className="text-sm font-semibold text-white sticky top-0 bg-slate-900/90 py-1">Text Fields (check to include)</h4>
               {textFields.map(field => (
                 <div key={field.id} className="flex items-center gap-2 bg-white/5 rounded-lg p-2">
                   <input type="checkbox" checked={field.selected} onChange={() => onToggleSelectText(field.id)} className="w-4 h-4" />
@@ -53,7 +59,7 @@ const ControlPanel = ({
               ))}
               {csvHeaders.length > 0 && (
                 <>
-                  <h4 className="text-sm font-semibold text-white mt-4 sticky top-0 bg-slate-900/90 py-1">CSV Columns (add as fields)</h4>
+                  <h4 className="text-sm font-semibold text-white mt-4">CSV Columns (add as fields)</h4>
                   {csvHeaders.map(col => (
                     <div key={col} className="flex items-center gap-2 bg-white/5 rounded-lg p-2">
                       <input type="checkbox" checked={selectedColumns.includes(col)} onChange={() => toggleColumn(col)} className="w-4 h-4" />
@@ -64,7 +70,7 @@ const ControlPanel = ({
                   <button onClick={handleAddSelectedColumns} disabled={selectedColumns.length === 0} className="btn-secondary w-full mt-2">Add Selected Columns</button>
                 </>
               )}
-              <h4 className="text-sm font-semibold text-white mt-4">QR Fields</h4>
+              <h4 className="text-sm font-semibold text-white mt-4">QR Fields (check to include)</h4>
               {qrFields.map(qr => (
                 <div key={qr.id} className="flex items-center gap-2 bg-white/5 rounded-lg p-2">
                   <input type="checkbox" checked={qr.selected} onChange={() => onToggleSelectQR(qr.id)} className="w-4 h-4" />
@@ -88,10 +94,7 @@ const ControlPanel = ({
         {activeTab === 'tools' && (
           <>
             {selectedTextIds.length > 0 && (
-              <TextTools 
-                fields={textFields.filter(f => selectedTextIds.includes(f.id))} 
-                onUpdate={applyToSelected} 
-              />
+              <TextTools fields={textFields.filter(f => selectedTextIds.includes(f.id))} onUpdate={applyToSelected} />
             )}
             {selectedQRIds.length === 1 && (
               <QRTools field={qrFields.find(q => q.id === selectedQRIds[0])} onUpdate={onUpdateQRField} />
@@ -104,7 +107,7 @@ const ControlPanel = ({
 
         {activeTab === 'uploads' && (
           <div className="space-y-4">
-            <FileUploader label="Certificate Template (keeps original size)" accept="image/*" onFileSelect={onBackgroundUpload} icon="🎨" />
+            <FileUploader label="Certificate Template (scaled to fit)" accept="image/*" onFileSelect={onBackgroundUpload} icon="🎨" />
             <FileUploader label="Signature (PNG)" accept="image/png" onFileSelect={onSignatureUpload} icon="✍️" />
             <FileUploader label="CSV/Excel Data" accept=".csv,.xlsx,.xls" onFileSelect={onCSVUpload} icon="📊" />
             <div className="border-t border-white/10 pt-3">

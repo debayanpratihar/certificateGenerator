@@ -3,7 +3,7 @@ import jsPDF from 'jspdf';
 import { fabric } from 'fabric';
 import { generateQRCodeDataURL } from './qrUtils';
 
-export const generateCertificatesZip = async (canvasRef, textFields, qrFields, data, headers, format, onProgress) => {
+export const generateCertificatesZip = async (canvasRef, selectedTexts, selectedQRs, data, headers, format, onProgress) => {
   const zip = new JSZip();
   const total = data.length;
   const canvas = canvasRef.getCanvas();
@@ -12,7 +12,15 @@ export const generateCertificatesZip = async (canvasRef, textFields, qrFields, d
     const row = data[i];
     const clonedCanvas = new fabric.Canvas(null, { width: canvas.width, height: canvas.height });
     
-    const state = canvas.toJSON(['qrPlaceholder', 'id']);
+    const allObjects = canvas.toJSON(['qrPlaceholder', 'id']).objects;
+      // Exclude QR placeholders from the exported certificate images; QR images are handled separately.
+      const filteredObjects = allObjects.filter(obj => {
+        if (obj.type === 'textbox') return selectedTexts.some(t => t.id === obj.id);
+        if (obj.qrPlaceholder) return false;
+        return obj.name === 'background' || obj.name === 'signature';
+      });
+    
+    const state = { objects: filteredObjects };
     
     state.objects = state.objects.map(obj => {
       if (obj.type === 'textbox') {
@@ -27,26 +35,7 @@ export const generateCertificatesZip = async (canvasRef, textFields, qrFields, d
 
     await new Promise((resolve) => {
       clonedCanvas.loadFromJSON(state, async () => {
-        const qrObjects = clonedCanvas.getObjects().filter(obj => obj.qrPlaceholder);
-        for (const qrObj of qrObjects) {
-          const fullUrl = row.verificationUrl + (row.securityData ? `?token=${row.securityData}` : '');
-          const qrData = await generateQRCodeDataURL(fullUrl, 300);
-          await new Promise((res) => {
-            fabric.Image.fromURL(qrData, (img) => {
-              img.set({
-                left: qrObj.left,
-                top: qrObj.top,
-                scaleX: qrObj.scaleX,
-                scaleY: qrObj.scaleY,
-                width: qrObj.width,
-                height: qrObj.height,
-              });
-              clonedCanvas.remove(qrObj);
-              clonedCanvas.add(img);
-              res();
-            });
-          });
-        }
+          // QR images are not embedded here. They should be uploaded and aligned separately by the user.
         clonedCanvas.renderAll();
         resolve();
       });
@@ -65,6 +54,39 @@ export const generateCertificatesZip = async (canvasRef, textFields, qrFields, d
     zip.file(fileName, blob);
     clonedCanvas.dispose();
     onProgress(i+1, total);
+  }
+  return zip.generateAsync({ type: 'blob' });
+};
+
+export const generateQRCodesZip = async (selectedQRIds, selectedTextIds, dataRows, headers, securityData) => {
+  const zip = new JSZip();
+  for (let i = 0; i < dataRows.length; i++) {
+    const row = dataRows[i];
+    for (const qrId of selectedQRIds) {
+      const payload = {
+        verificationUrl: row.verificationUrl || `${window.location.origin}/verify/${row.verificationId || i+1}`,
+        token: securityData || row.securityData || '',
+        fields: {}
+      };
+      // include selected text fields values
+      selectedTextIds.forEach(tid => {
+        // find text field template in dataRows? assume caller provides headers replacement
+        let val = '';
+        // try to resolve from headers
+        headers.forEach(h => {
+          if (row[h]) {
+            // nothing — we rely on caller to map placeholders in verification step
+          }
+        });
+        payload.fields[tid] = row[tid] || row.Name || '';
+      });
+      const size = 300;
+      const dataUrl = await generateQRCodeDataURL(JSON.stringify(payload), size);
+      // convert dataURL to binary and add to zip
+      const base64 = dataUrl.split(',')[1];
+      const fileName = `${row.verificationId || row.Name || row.name || 'row'+(i+1)}_${qrId}.png`;
+      zip.file(fileName, base64, { base64: true });
+    }
   }
   return zip.generateAsync({ type: 'blob' });
 };

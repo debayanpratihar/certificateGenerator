@@ -3,18 +3,16 @@ import React from 'react';
 const fonts = ['Arial', 'Georgia', 'Times New Roman', 'Verdana', 'Courier New', 'Poppins', 'Roboto', 'Montserrat', 'Open Sans', 'Lato'];
 
 const TextTools = ({ fields, onUpdate }) => {
-  // Use first field as reference for UI, but apply changes to all selected
   const representative = fields[0];
-
-  const handleUpdate = (updates) => {
-    onUpdate(updates);
-  };
-
+  const handleUpdate = (updates) => { onUpdate(updates); };
   if (!representative) return null;
-
   return (
     <div className="space-y-3">
       <h3 className="text-sm font-semibold text-white">Edit {fields.length} field(s)</h3>
+      <div>
+        <label className="text-xs text-gray-400">Text</label>
+        <textarea value={representative.text} onChange={(e) => handleUpdate({ text: e.target.value })} className="input-dark w-full h-24 p-2 text-sm" />
+      </div>
       <div><label className="text-xs text-gray-400">Font</label><select value={representative.font} onChange={(e) => handleUpdate({ font: e.target.value })} className="input-dark w-full">{fonts.map(f => <option key={f}>{f}</option>)}</select></div>
       <div><label className="text-xs text-gray-400">Size (x)</label><input type="range" min="1" max="12" value={representative.fontSize} onChange={(e) => handleUpdate({ fontSize: parseInt(e.target.value) })} className="w-full" /><span className="text-xs ml-2">{representative.fontSize}x</span></div>
       <div><label className="text-xs text-gray-400">Align</label><select value={representative.align} onChange={(e) => handleUpdate({ align: e.target.value })} className="input-dark w-full"><option>left</option><option>center</option><option>right</option></select></div>
