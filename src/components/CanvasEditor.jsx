@@ -547,7 +547,7 @@ const CanvasEditor = forwardRef(({ onCanvasReady, textFields, qrFields, onTextFi
       const reader = new FileReader();
       reader.onload = (e) => {
         fabric.Image.fromURL(e.target.result, (img) => {
-          img.set({ left: CANVAS_WIDTH - 100, top: CANVAS_HEIGHT - 80, scaleX: 0.3, scaleY: 0.3, name: 'signature' });
+          img.set({ left: CANVAS_WIDTH - 60, top: CANVAS_HEIGHT - 70, scaleX: 0.3, scaleY: 0.3, name: 'signature' });
           const existingSig = canvas.getObjects().find(obj => obj.name === 'signature');
           if (existingSig) canvas.remove(existingSig);
           canvas.add(img);
