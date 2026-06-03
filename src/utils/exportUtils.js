@@ -78,10 +78,18 @@ export const generateQRCodesZip = async (selectedQRIds, selectedTextFields, data
         payload.fields[field.id] = row[field.id] || row.Name || '';
       });
 
-      // embed the full payload into the verification URL as base64 so scanning the QR redirects with data
-      const raw = JSON.stringify(payload);
-      const b64 = typeof window !== 'undefined' ? window.btoa(unescape(encodeURIComponent(raw))) : Buffer.from(raw).toString('base64');
-      const verificationUrl = `${window.location.origin}/verify/placeholder?payload=${b64}`;
+      // embed human-readable fields into the verification URL as query params so scanners show the data directly
+      const params = new URLSearchParams();
+      params.set('vid', payload.verificationId || payload.verificationId || `auto-${i+1}`);
+      if (payload.token) params.set('t', payload.token);
+      // include selected fields as readable params (limit length per value)
+      Object.entries(payload.fields || {}).forEach(([k, v]) => {
+        try {
+          const str = String(v || '').slice(0, 200); // limit to 200 chars per field
+          params.set(k, str);
+        } catch (e) {}
+      });
+      const verificationUrl = `${window.location.origin}/verify/placeholder?${params.toString()}`;
       const size = 300;
       const dataUrl = await generateQRCodeDataURL(verificationUrl, size);
       // convert dataURL to binary and add to zip
