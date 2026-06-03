@@ -23,10 +23,26 @@ const Verify = () => {
       const payloadB64 = params.get('payload') || params.get('data');
       if (payloadB64) {
         try {
-          const decoded = JSON.parse(decodeURIComponent(window.atob(payloadB64)));
-          setVerificationData(decoded);
-          setLoading(false);
-          return;
+          // Robust base64 -> utf8 decode
+          const b64 = payloadB64.replace(/\s+/g, '');
+          const str = (() => {
+            try {
+              // browser: atob may return binary string; decode to UTF-8
+              const binary = window.atob(b64);
+              // percent-encode each byte and decode
+              const percentEncoded = binary.split('').map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join('');
+              return decodeURIComponent(percentEncoded);
+            } catch (e) {
+              // fallback: try Buffer (node/electron)
+              try { return Buffer.from(b64, 'base64').toString('utf8'); } catch (e2) { return null; }
+            }
+          })();
+          if (str) {
+            const decoded = JSON.parse(str);
+            setVerificationData(decoded);
+            setLoading(false);
+            return;
+          }
         } catch (e) {
           // ignore and fallthrough to error
         }
