@@ -6,59 +6,45 @@ import { generateQRCodeDataURL } from './qrUtils';
 export const generateCertificatesZip = async (canvasRef, selectedTexts, selectedQRs, data, headers, format, onProgress) => {
   const zip = new JSZip();
   const total = data.length;
-  const canvas = canvasRef.getCanvas();
-
+  // Prefer using the canvasRef export helper that can temporarily apply replacements
   for (let i = 0; i < total; i++) {
     const row = data[i];
-    const clonedCanvas = new fabric.Canvas(null, { width: canvas.width, height: canvas.height });
-    
-    const allObjects = canvas.toJSON(['qrPlaceholder', 'id']).objects;
-      // Exclude QR placeholders from the exported certificate images; QR images are handled separately.
-      const filteredObjects = allObjects.filter(obj => {
-        if (obj.type === 'textbox') return selectedTexts.some(t => t.id === obj.id);
-        if (obj.qrPlaceholder) return false;
-        return obj.name === 'background' || obj.name === 'signature';
+    // build text replacements for selected text fields
+    const textMap = {};
+    selectedTexts.forEach(t => {
+      let template = t.text || '';
+      headers.forEach(header => {
+        template = template.replace(new RegExp(`{{${header}}}`, 'g'), row[header] || '');
       });
-    
-    const state = { objects: filteredObjects };
-    
-    state.objects = state.objects.map(obj => {
-      if (obj.type === 'textbox') {
-        let newText = obj.text;
-        headers.forEach(header => {
-          newText = newText.replace(new RegExp(`{{${header}}}`, 'g'), row[header] || '');
-        });
-        return { ...obj, text: newText };
-      }
-      return obj;
+      textMap[t.id] = template;
     });
 
-    await new Promise((resolve) => {
-      clonedCanvas.loadFromJSON(state, async () => {
-          // QR images are not embedded here. They should be uploaded and aligned separately by the user.
-        clonedCanvas.renderAll();
-        resolve();
-      });
+    // build qr replacements mapping qrId -> verification URL
+    const qrMap = {};
+    selectedQRs.forEach(q => {
+      qrMap[q.id] = row.verificationUrl || `${window.location.origin}/verify/${row.verificationId || i+1}`;
     });
 
-    let blob;
-    if (format === 'pdf') {
-      const dataURL = clonedCanvas.toDataURL('image/png');
-      const pdf = new jsPDF({ orientation: canvas.width > canvas.height ? 'landscape' : 'portrait', unit: 'px', format: [canvas.width, canvas.height] });
-      pdf.addImage(dataURL, 'PNG', 0, 0, canvas.width, canvas.height);
-      blob = pdf.output('blob');
+    // use canvasRef.exportWithReplacements if available
+    let dataURL;
+    if (canvasRef && typeof canvasRef.exportWithReplacements === 'function') {
+      dataURL = await canvasRef.exportWithReplacements(textMap, qrMap, format === 'pdf' ? 'png' : format);
     } else {
-      blob = await new Promise(resolve => clonedCanvas.getElement().toBlob(resolve, format === 'jpg' ? 'image/jpeg' : 'image/png', 1));
+      // fallback: export as-is
+      const canvas = canvasRef.getCanvas();
+      dataURL = canvas.toDataURL('image/png');
     }
-    const fileName = `${row.Name || row.name || 'certificate'}_${i+1}.${format === 'pdf' ? 'pdf' : format}`;
+
+    // convert dataURL to blob
+    const blob = await (await fetch(dataURL)).blob();
+    const fileName = `${row.verificationId || row.Name || row.name || 'certificate'}_${i+1}.${format === 'pdf' ? 'pdf' : format}`;
     zip.file(fileName, blob);
-    clonedCanvas.dispose();
     onProgress(i+1, total);
   }
   return zip.generateAsync({ type: 'blob' });
 };
 
-export const generateQRCodesZip = async (selectedQRIds, selectedTextIds, dataRows, headers, securityData) => {
+export const generateQRCodesZip = async (selectedQRIds, selectedTextFields, dataRows, headers, securityData) => {
   const zip = new JSZip();
   for (let i = 0; i < dataRows.length; i++) {
     const row = dataRows[i];
@@ -68,17 +54,18 @@ export const generateQRCodesZip = async (selectedQRIds, selectedTextIds, dataRow
         token: securityData || row.securityData || '',
         fields: {}
       };
-      // include selected text fields values
-      selectedTextIds.forEach(tid => {
-        // find text field template in dataRows? assume caller provides headers replacement
+      // include selected text fields values (extract header name from template like {{Header}})
+      selectedTextFields.forEach(field => {
         let val = '';
-        // try to resolve from headers
-        headers.forEach(h => {
-          if (row[h]) {
-            // nothing — we rely on caller to map placeholders in verification step
-          }
-        });
-        payload.fields[tid] = row[tid] || row.Name || '';
+        // attempt to extract header name from field.text like {{Header}}
+        const m = (field.text || '').match(/{{\s*([^}]+)\s*}}/);
+        if (m && m[1]) {
+          const header = m[1];
+          val = row[header] || row.Name || '';
+          payload.fields[header] = val;
+        }
+        // also include by field id for mapping
+        payload.fields[field.id] = val;
       });
       const size = 300;
       const dataUrl = await generateQRCodeDataURL(JSON.stringify(payload), size);

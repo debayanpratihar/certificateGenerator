@@ -13,9 +13,29 @@ const Verify = () => {
     const data = getVerificationData(id);
     if (data) {
       setVerificationData(data);
-    } else {
-      setError(true);
+      setLoading(false);
+      return;
     }
+
+    // If not found, check for a payload in the query (base64 JSON). Useful for placeholder QR scans.
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const payloadB64 = params.get('payload') || params.get('data');
+      if (payloadB64) {
+        try {
+          const decoded = JSON.parse(decodeURIComponent(window.atob(payloadB64)));
+          setVerificationData(decoded);
+          setLoading(false);
+          return;
+        } catch (e) {
+          // ignore and fallthrough to error
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
+
+    setError(true);
     setLoading(false);
   }, [id]);
 

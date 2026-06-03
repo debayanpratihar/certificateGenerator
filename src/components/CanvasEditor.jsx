@@ -74,36 +74,143 @@ const CanvasEditor = forwardRef(({ onCanvasReady, textFields, qrFields, onTextFi
     replaceQRImages: async (qrUpdates) => {
       const canvas = fabricCanvasRef.current;
       if (!canvas) return;
+      const promises = [];
       for (const [qrId, value] of Object.entries(qrUpdates)) {
         const obj = qrObjectsRef.current[qrId];
         if (obj && obj.type === 'image') {
-          // If value is already a data URL, use it directly
           let src = value;
           if (!src || typeof src !== 'string') continue;
-          if (!src.startsWith('data:')) {
-            try { src = await generateQRCodeDataURL(src, 300); } catch (e) { src = value; }
-          }
-          fabric.Image.fromURL(src, (img) => {
-            img.set({
-              left: obj.left,
-              top: obj.top,
-              scaleX: obj.scaleX,
-              scaleY: obj.scaleY,
-              width: obj.width,
-              height: obj.height,
-              hasControls: true,
-              hasBorders: true,
-              lockUniScaling: false,
-              id: qrId,
-              qrPlaceholder: true,
-            });
-            canvas.remove(obj);
-            canvas.add(img);
-            qrObjectsRef.current[qrId] = img;
-            canvas.renderAll();
+          const p = new Promise(async (resolve) => {
+            if (!src.startsWith('data:')) {
+              try { src = await generateQRCodeDataURL(src, 300); } catch (e) { /* fallthrough */ }
+            }
+            fabric.Image.fromURL(src, (img) => {
+              img.set({
+                left: obj.left,
+                top: obj.top,
+                scaleX: obj.scaleX,
+                scaleY: obj.scaleY,
+                width: obj.width,
+                height: obj.height,
+                hasControls: true,
+                hasBorders: true,
+                lockUniScaling: false,
+                id: qrId,
+                qrPlaceholder: true,
+              });
+              try { canvas.remove(obj); } catch (e) {}
+              canvas.add(img);
+              qrObjectsRef.current[qrId] = img;
+              canvas.renderAll();
+              resolve();
+            }, { crossOrigin: 'anonymous' });
           });
+          promises.push(p);
         }
       }
+      await Promise.all(promises);
+    },
+    // replace text contents (synchronous) and return previous map for restoration
+    replaceTextContents: (textUpdates) => {
+      const canvas = fabricCanvasRef.current;
+      if (!canvas) return {};
+      const prev = {};
+      for (const [id, newText] of Object.entries(textUpdates)) {
+        const obj = textObjectsRef.current[id];
+        if (obj) {
+          prev[id] = obj.text;
+          obj.text = newText;
+          obj.setCoords();
+        }
+      }
+      canvas.renderAll();
+      return prev;
+    },
+    restoreTextContents: (prevMap) => {
+      const canvas = fabricCanvasRef.current;
+      if (!canvas) return;
+      for (const [id, text] of Object.entries(prevMap || {})) {
+        const obj = textObjectsRef.current[id];
+        if (obj) {
+          obj.text = text;
+          obj.setCoords();
+        }
+      }
+      canvas.renderAll();
+    },
+    // Export with temporary replacements for text and QR, restores afterwards
+    exportWithReplacements: async (textMap = {}, qrMap = {}, format = 'png') => {
+      const canvas = fabricCanvasRef.current;
+      if (!canvas) return '';
+      const prevTexts = {};
+      // apply text replacements
+      Object.entries(textMap).forEach(([id, val]) => {
+        const obj = textObjectsRef.current[id];
+        if (obj) { prevTexts[id] = obj.text; obj.text = val; obj.setCoords(); }
+      });
+      canvas.renderAll();
+      // apply qr replacements
+      const qrRestoreMap = {};
+      Object.keys(qrMap).forEach(id => { qrRestoreMap[id] = 'https://certificate-generator-ten-self.vercel.app/verify/placeholder'; });
+      // use replaceQRImages to set QR images
+      if (Object.keys(qrMap).length > 0) await module && module; // noop to keep flow consistent
+      await new Promise((res) => setTimeout(res, 0));
+      // call the replaceQRImages defined above by invoking it on this returned object is not straightforward here,
+      // but we can reuse the implementation by building promises similar to replaceQRImages logic inline
+      const qrPromises = [];
+      for (const [qrId, value] of Object.entries(qrMap)) {
+        const obj = qrObjectsRef.current[qrId];
+        if (obj && obj.type === 'image') {
+          let src = value;
+          const p = new Promise(async (resolve) => {
+            if (!src.startsWith('data:')) {
+              try { src = await generateQRCodeDataURL(src, 300); } catch (e) { /* ignore */ }
+            }
+            fabric.Image.fromURL(src, (img) => {
+              img.set({ left: obj.left, top: obj.top, scaleX: obj.scaleX, scaleY: obj.scaleY, width: obj.width, height: obj.height, hasControls: true, lockUniScaling: false, id: qrId, qrPlaceholder: true });
+              try { canvas.remove(obj); } catch (e) {}
+              canvas.add(img);
+              qrObjectsRef.current[qrId] = img;
+              canvas.renderAll();
+              resolve();
+            }, { crossOrigin: 'anonymous' });
+          });
+          qrPromises.push(p);
+        }
+      }
+      await Promise.all(qrPromises);
+      const dataURL = canvas.toDataURL({ format: format === 'jpg' ? 'jpeg' : 'png', quality: 1 });
+      // restore qr placeholders
+      const restorePromises = [];
+      for (const [id] of Object.entries(qrMap)) {
+        const obj = qrObjectsRef.current[id];
+        if (obj) {
+          const placeholder = 'https://certificate-generator-ten-self.vercel.app/verify/placeholder';
+          const p = new Promise(async (resolve) => {
+            let src = placeholder;
+            if (!src.startsWith('data:')) {
+              try { src = await generateQRCodeDataURL(src, 300); } catch (e) { /* ignore */ }
+            }
+            fabric.Image.fromURL(src, (img) => {
+              img.set({ left: obj.left, top: obj.top, scaleX: obj.scaleX, scaleY: obj.scaleY, width: obj.width, height: obj.height, hasControls: true, lockUniScaling: false, id, qrPlaceholder: true });
+              try { canvas.remove(obj); } catch (e) {}
+              canvas.add(img);
+              qrObjectsRef.current[id] = img;
+              canvas.renderAll();
+              resolve();
+            }, { crossOrigin: 'anonymous' });
+          });
+          restorePromises.push(p);
+        }
+      }
+      await Promise.all(restorePromises);
+      // restore texts
+      Object.entries(prevTexts).forEach(([id, text]) => {
+        const obj = textObjectsRef.current[id];
+        if (obj) { obj.text = text; obj.setCoords(); }
+      });
+      canvas.renderAll();
+      return dataURL;
     }
   }));
 
@@ -194,22 +301,114 @@ const CanvasEditor = forwardRef(({ onCanvasReady, textFields, qrFields, onTextFi
       getCanvas: () => fabricCanvasRef.current,
       exportAsImage: (format) => fabricCanvasRef.current.toDataURL({ format: format === 'jpg' ? 'jpeg' : 'png', quality: 1 }),
       replaceQRImages: async (updates) => {
-        for (const [id, value] of Object.entries(updates)) {
-          const obj = qrObjectsRef.current[id];
+        const canvasLocal = fabricCanvasRef.current;
+        if (!canvasLocal) return;
+        const promises = [];
+        for (const [qrId, value] of Object.entries(updates)) {
+          const obj = qrObjectsRef.current[qrId];
           if (obj) {
             let src = value;
-            if (!src.startsWith('data:')) {
-              try { src = await generateQRCodeDataURL(src, 300); } catch (e) { src = value; }
-            }
-            fabric.Image.fromURL(src, (img) => {
-              img.set({ left: obj.left, top: obj.top, scaleX: obj.scaleX, scaleY: obj.scaleY, width: obj.width, height: obj.height, hasControls: true, lockUniScaling: false, id, qrPlaceholder: true });
-              canvas.remove(obj);
-              canvas.add(img);
-              qrObjectsRef.current[id] = img;
-              canvas.renderAll();
+            const p = new Promise(async (resolve) => {
+              if (!src.startsWith('data:')) {
+                try { src = await generateQRCodeDataURL(src, 300); } catch (e) { /* ignore */ }
+              }
+              fabric.Image.fromURL(src, (img) => {
+                img.set({ left: obj.left, top: obj.top, scaleX: obj.scaleX, scaleY: obj.scaleY, width: obj.width, height: obj.height, hasControls: true, lockUniScaling: false, id: qrId, qrPlaceholder: true });
+                try { canvasLocal.remove(obj); } catch (e) {}
+                canvasLocal.add(img);
+                qrObjectsRef.current[qrId] = img;
+                canvasLocal.renderAll();
+                resolve();
+              }, { crossOrigin: 'anonymous' });
             });
+            promises.push(p);
           }
         }
+        await Promise.all(promises);
+      },
+      replaceTextContents: (textUpdates) => {
+        const canvasLocal = fabricCanvasRef.current;
+        if (!canvasLocal) return {};
+        const prev = {};
+        for (const [id, newText] of Object.entries(textUpdates)) {
+          const obj = textObjectsRef.current[id];
+          if (obj) { prev[id] = obj.text; obj.text = newText; obj.setCoords(); }
+        }
+        canvasLocal.renderAll();
+        return prev;
+      },
+      restoreTextContents: (prevMap) => {
+        const canvasLocal = fabricCanvasRef.current;
+        if (!canvasLocal) return;
+        for (const [id, text] of Object.entries(prevMap || {})) {
+          const obj = textObjectsRef.current[id];
+          if (obj) { obj.text = text; obj.setCoords(); }
+        }
+        canvasLocal.renderAll();
+      },
+      exportWithReplacements: async (textMap = {}, qrMap = {}, format = 'png') => {
+        const canvasLocal = fabricCanvasRef.current;
+        if (!canvasLocal) return '';
+        const prevTexts = {};
+        Object.entries(textMap).forEach(([id, val]) => {
+          const obj = textObjectsRef.current[id];
+          if (obj) { prevTexts[id] = obj.text; obj.text = val; obj.setCoords(); }
+        });
+        canvasLocal.renderAll();
+        const qrPromises = [];
+        for (const [qrId, value] of Object.entries(qrMap)) {
+          const obj = qrObjectsRef.current[qrId];
+          if (obj) {
+            let src = value;
+            const p = new Promise(async (resolve) => {
+              if (!src.startsWith('data:')) {
+                try { src = await generateQRCodeDataURL(src, 300); } catch (e) { /* ignore */ }
+              }
+              fabric.Image.fromURL(src, (img) => {
+                img.set({ left: obj.left, top: obj.top, scaleX: obj.scaleX, scaleY: obj.scaleY, width: obj.width, height: obj.height, hasControls: true, lockUniScaling: false, id: qrId, qrPlaceholder: true });
+                try { canvasLocal.remove(obj); } catch (e) {}
+                canvasLocal.add(img);
+                qrObjectsRef.current[qrId] = img;
+                canvasLocal.renderAll();
+                resolve();
+              }, { crossOrigin: 'anonymous' });
+            });
+            qrPromises.push(p);
+          }
+        }
+        await Promise.all(qrPromises);
+        const dataURL = canvasLocal.toDataURL({ format: format === 'jpg' ? 'jpeg' : 'png', quality: 1 });
+        // restore qr placeholders
+        const restorePromises = [];
+        for (const [id] of Object.entries(qrMap)) {
+          const obj = qrObjectsRef.current[id];
+          if (obj) {
+            const placeholder = 'https://certificate-generator-ten-self.vercel.app/verify/placeholder';
+            const p = new Promise(async (resolve) => {
+              let src = placeholder;
+              if (!src.startsWith('data:')) {
+                try { src = await generateQRCodeDataURL(src, 300); } catch (e) { /* ignore */ }
+              }
+              fabric.Image.fromURL(src, (img) => {
+                img.set({ left: obj.left, top: obj.top, scaleX: obj.scaleX, scaleY: obj.scaleY, width: obj.width, height: obj.height, hasControls: true, lockUniScaling: false, id, qrPlaceholder: true });
+                try { canvasLocal.remove(obj); } catch (e) {}
+                canvasLocal.add(img);
+                qrObjectsRef.current[id] = img;
+                canvasLocal.renderAll();
+                resolve();
+              }, { crossOrigin: 'anonymous' });
+            });
+            restorePromises.push(p);
+          }
+        }
+        await Promise.all(restorePromises);
+        // restore texts
+        Object.entries(prevTexts).forEach(([id, text]) => {
+          const obj = textObjectsRef.current[id];
+          if (obj) { obj.text = text; obj.setCoords(); }
+        });
+        canvasLocal.renderAll();
+        return dataURL;
       }
     });
 

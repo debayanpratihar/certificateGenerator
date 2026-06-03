@@ -67,7 +67,7 @@ const Editor = () => {
       setCsvData(data);
       if (data.length > 0) {
         const demo = {};
-        headers.slice(0, 3).forEach(h => { demo[h] = data[0][h]; });
+        headers.forEach(h => { demo[h] = data[0][h]; });
         setDemoData(demo);
       }
       showToast(`Loaded ${data.length} records with ${headers.length} columns`, 'success');
@@ -168,10 +168,10 @@ const Editor = () => {
       return;
     }
     try {
-      const selectedTextIdsLocal = textFields.filter(f => f.selected).map(f => f.id);
+      const selectedTextFieldsLocal = textFields.filter(f => f.selected);
       const zipBlob = await generateQRCodesZip(
         selectedQRIds,
-        selectedTextIdsLocal,
+        selectedTextFieldsLocal,
         csvData.map((r, idx) => ({ ...r, verificationId: r.verificationId || `auto-${idx+1}` })),
         csvHeaders,
         securityData
@@ -201,25 +201,85 @@ const Editor = () => {
       const canvasApi = canvasRef;
       if (!canvasApi) { showToast('Canvas not ready', 'error'); return; }
       const canvas = canvasApi.getCanvas();
+
+      // Collect files and detect pattern verificationId_qrId.png
+      const verMap = {}; // verificationId -> [{ qrId, blob }]
+      const entries = [];
       for (const path of Object.keys(zip.files)) {
         const entry = zip.files[path];
         if (entry.dir) continue;
         const blob = await entry.async('blob');
-        const url = URL.createObjectURL(blob);
         const fileName = path.split('/').pop();
         const base = fileName.replace(/\.[^/.]+$/, '');
         const parts = base.split('_');
-        const candidate = parts[parts.length - 1];
-        const qrField = qrFields.find(q => q.id === candidate) || qrFields.find(q => base.includes(q.id));
+        if (parts.length >= 2) {
+          const verificationId = parts[0];
+          const qrId = parts.slice(1).join('_');
+          if (!verMap[verificationId]) verMap[verificationId] = [];
+          verMap[verificationId].push({ qrId, blob });
+        } else {
+          entries.push({ fileName, blob });
+        }
+      }
+
+      // If there are multiple verification entries, generate per-certificate exports
+      const verificationIds = Object.keys(verMap);
+      if (verificationIds.length > 0) {
+        const outZip = new JSZip();
+        // need verification data to replace text placeholders
+        const { getVerificationData } = await import('../utils/verificationStore');
+        for (const vid of verificationIds) {
+          const items = verMap[vid];
+          // build qrMap with data URLs
+          const qrMap = {};
+          for (const it of items) {
+            // convert blob -> dataURL
+            const dataURL = await new Promise((res) => {
+              const reader = new FileReader();
+              reader.onload = (e) => res(e.target.result);
+              reader.readAsDataURL(it.blob);
+            });
+            // look for matching qrField id; prefer exact match to it.qrId
+            const matchField = qrFields.find(q => q.id === it.qrId) || qrFields[0];
+            if (matchField) qrMap[matchField.id] = dataURL;
+          }
+
+          // build textMap from verification data if available
+          const row = getVerificationData(vid) || {};
+          const textMap = {};
+          textFields.forEach(t => {
+            let template = t.text || '';
+            // replace any {{header}} with value from row
+            (Object.keys(row)).forEach(h => {
+              template = template.replace(new RegExp(`{{${h}}}`, 'g'), row[h] || '');
+            });
+            textMap[t.id] = template;
+          });
+
+          // export using canvasRef helper
+          if (canvasRef && typeof canvasRef.exportWithReplacements === 'function') {
+            const dataURL = await canvasRef.exportWithReplacements(textMap, qrMap, 'png');
+            const blob = await (await fetch(dataURL)).blob();
+            outZip.file(`${vid}.png`, blob);
+          }
+        }
+        const outBlob = await outZip.generateAsync({ type: 'blob' });
+        const link = document.createElement('a');
+        link.download = `certificates_with_qr_${Date.now()}.zip`;
+        link.href = URL.createObjectURL(outBlob);
+        document.body.appendChild(link);
+        link.click();
+        setTimeout(() => { URL.revokeObjectURL(link.href); document.body.removeChild(link); }, 1500);
+        showToast('Certificates with QR generated and downloaded', 'success');
+        return;
+      }
+
+      // fallback: place images onto canvas for manual alignment
+      for (const e of entries) {
+        const url = URL.createObjectURL(e.blob);
         await new Promise((res) => {
           fabric.Image.fromURL(url, (img) => {
-            if (qrField) {
-              const left = (qrField.x / 100) * canvas.width;
-              const top = (qrField.y / 100) * canvas.height;
-              img.set({ left, top, width: qrField.width, height: qrField.height, scaleX: 1, scaleY: 1, hasControls: true, hasBorders: true, selectable: true, name: 'qr-upload', id: `uploaded-${Date.now()}` });
-            } else {
-              img.set({ left: canvas.width / 2 - img.width / 2, top: canvas.height / 2 - img.height / 2, hasControls: true, hasBorders: true, selectable: true, name: 'qr-upload', id: `uploaded-${Date.now()}` });
-            }
+            img.set({ left: canvas.width / 2 - img.width / 2, top: canvas.height / 2 - img.height / 2, hasControls: true, hasBorders: true, selectable: true, name: 'qr-upload', id: `uploaded-${Date.now()}` });
             canvas.add(img);
             canvas.renderAll();
             URL.revokeObjectURL(url);
@@ -227,7 +287,7 @@ const Editor = () => {
           }, { crossOrigin: 'anonymous' });
         });
       }
-      showToast('QR images uploaded and placed', 'success');
+      if (entries.length > 0) showToast('QR images uploaded and placed', 'success');
     } catch (e) {
       console.error('QR ZIP upload error', e);
       showToast('Error processing QR ZIP', 'error');
@@ -250,25 +310,51 @@ const Editor = () => {
       const extra = securityData ? { securityToken: securityData } : {};
       saveVerificationMapping({ [verificationId]: { single: true, ...extra, generatedAt: new Date().toISOString() } });
       const verificationUrl = `${window.location.origin}/verify/${verificationId}`;
-      
-      if (selectedQRs.length > 0) {
-        const qrUpdates = {};
-        selectedQRs.forEach(qr => { qrUpdates[qr.id] = verificationUrl; });
-        await canvasRef.replaceQRImages(qrUpdates);
+
+      // build text replacements using CSV first row if available, otherwise demoData
+      const sourceRow = (csvData && csvData.length > 0) ? csvData[0] : demoData || {};
+      const textMap = {};
+      selectedTexts.forEach(t => {
+        let template = t.text || '';
+        Object.keys(sourceRow).forEach(h => {
+          template = template.replace(new RegExp(`{{${h}}}`, 'g'), sourceRow[h] || '');
+        });
+        textMap[t.id] = template;
+      });
+
+      const qrMap = {};
+      selectedQRs.forEach(qr => { qrMap[qr.id] = verificationUrl; });
+
+      // Use exportWithReplacements to apply both text and QR replacements temporarily
+      let dataURL;
+      if (canvasRef && typeof canvasRef.exportWithReplacements === 'function') {
+        dataURL = await canvasRef.exportWithReplacements(textMap, qrMap, format);
+      } else {
+        // fallback: replace QR then export
+        if (selectedQRs.length > 0) {
+          const qrUpdates = {};
+          selectedQRs.forEach(qr => { qrUpdates[qr.id] = verificationUrl; });
+          await canvasRef.replaceQRImages(qrUpdates);
+        }
+        // replace texts synchronously
+        canvasRef.replaceTextContents && canvasRef.replaceTextContents(textMap);
+        dataURL = canvasRef.exportAsImage(format);
+        // restore texts if possible
+        canvasRef.restoreTextContents && canvasRef.restoreTextContents(textMap);
+        if (selectedQRs.length > 0) {
+          const restoreUpdates = {};
+          selectedQRs.forEach(qr => { restoreUpdates[qr.id] = 'https://certificate-generator-ten-self.vercel.app/verify/placeholder'; });
+          await canvasRef.replaceQRImages(restoreUpdates);
+        }
       }
-      
-      const dataURL = canvasRef.exportAsImage(format);
+
       const link = document.createElement('a');
       link.download = `certificate_${Date.now()}.${format}`;
       link.href = dataURL;
+      document.body.appendChild(link);
       link.click();
+      setTimeout(() => { try { document.body.removeChild(link); } catch (e) {} }, 500);
       showToast('Certificate downloaded successfully!', 'success');
-      
-      if (selectedQRs.length > 0) {
-        const restoreUpdates = {};
-        selectedQRs.forEach(qr => { restoreUpdates[qr.id] = 'https://certificate-generator-ten-self.vercel.app/verify/placeholder'; });
-        await canvasRef.replaceQRImages(restoreUpdates);
-      }
     } catch (error) {
       console.error(error);
       showToast('Error downloading certificate', 'error');
